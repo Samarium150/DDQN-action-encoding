@@ -20,7 +20,7 @@ contourpy==1.3.3
     # via matplotlib
 cycler==0.12.1
     # via matplotlib
-deepdiff==7.0.1
+deepdiff==8.6.1
     # via tianshou
 distlib==0.4.0
     # via virtualenv
