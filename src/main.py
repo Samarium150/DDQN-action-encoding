@@ -128,7 +128,7 @@ def main(args: argparse.Namespace = get_args()) -> None:
         n_step_return_horizon=args.n_step,
         target_update_freq=args.target_update_freq,
         is_double=True
-    )
+    ).to(args.device)
     if args.icm_lr_scale > 0:
         c, h, w = args.state_shape
         feature_net = DQNet(c=c, h=h, w=w, action_shape=args.action_shape, features_only=True)

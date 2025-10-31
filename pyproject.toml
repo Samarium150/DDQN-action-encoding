@@ -10,3 +10,25 @@ dependencies = [
     "tianshou>=2.0.0b2",
     "wandb>=0.22.3",
 ]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'macos'" },
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
+  { index = "pytorch-cu130", marker = "sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
