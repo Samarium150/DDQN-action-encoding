@@ -4,23 +4,35 @@ import os
 import pprint
 import sys
 
+# noinspection PyUnusedImports
 import ale_py
-import gymnasium as gym
 import numpy as np
 import torch
-from tianshou.algorithm import DQN
-from tianshou.algorithm.algorithm_base import Algorithm
-from tianshou.algorithm.modelbased.icm import ICMOffPolicyWrapper
-from tianshou.algorithm.modelfree.dqn import DiscreteQLearningPolicy
-from tianshou.algorithm.optim import AdamOptimizerFactory
+from atari_network import DQN
+from atari_wrapper import make_atari_env
+
 from tianshou.data import Collector, CollectStats, VectorReplayBuffer
-from tianshou.env.atari.atari_network import DQNet
-from tianshou.env.atari.atari_wrapper import make_atari_env
 from tianshou.highlevel.logger import LoggerFactoryDefault
-from tianshou.trainer import OffPolicyTrainerParams
+from tianshou.policy import DQNPolicy
+from tianshou.policy.base import BasePolicy
+from tianshou.policy.modelbased.icm import ICMPolicy
+from tianshou.trainer import OffpolicyTrainer
 from tianshou.utils.net.discrete import IntrinsicCuriosityModule
 
-gym.register_envs(ale_py)
+def _patch_collector_for_wsl_time():
+    """Patch Collector to handle WSL time adjustment issues."""
+    from tianshou.data.collector import CollectStats
+
+    # Store original set_collect_time
+    original_set_collect_time = CollectStats.set_collect_time
+
+    def patched_set_collect_time(self, collect_time: float, update_collect_speed: bool = True) -> None:
+        # Clamp negative times to 0 (WSL clock adjustment can cause negative times)
+        collect_time = max(0.0, collect_time)
+        return original_set_collect_time(self, collect_time, update_collect_speed)
+
+    # Apply monkey patch
+    CollectStats.set_collect_time = patched_set_collect_time
 
 
 def get_args() -> argparse.Namespace:
@@ -28,22 +40,22 @@ def get_args() -> argparse.Namespace:
         description="Explore different action-encoding methods for DDQN in Atari environments")
     parser.add_argument("--task", type=str, default="PongNoFrameskip-v4")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--scale_obs", type=int, default=0)
-    parser.add_argument("--eps_test", type=float, default=0.005)
-    parser.add_argument("--eps_train", type=float, default=1.0)
-    parser.add_argument("--eps_train_final", type=float, default=0.05)
-    parser.add_argument("--buffer_size", type=int, default=100000)
+    parser.add_argument("--scale-obs", type=int, default=0)
+    parser.add_argument("--eps-test", type=float, default=0.005)
+    parser.add_argument("--eps-train", type=float, default=1.0)
+    parser.add_argument("--eps-train-final", type=float, default=0.05)
+    parser.add_argument("--buffer-size", type=int, default=100000)
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--n_step", type=int, default=3)
-    parser.add_argument("--target_update_freq", type=int, default=500)
+    parser.add_argument("--n-step", type=int, default=3)
+    parser.add_argument("--target-update-freq", type=int, default=500)
     parser.add_argument("--epoch", type=int, default=100)
-    parser.add_argument("--epoch_num_steps", type=int, default=100000)
-    parser.add_argument("--collection_step_num_env_steps", type=int, default=10)
-    parser.add_argument("--update_per_step", type=float, default=0.1)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--num_train_envs", type=int, default=10)
-    parser.add_argument("--num_test_envs", type=int, default=10)
+    parser.add_argument("--step-per-epoch", type=int, default=100000)
+    parser.add_argument("--step-per-collect", type=int, default=10)
+    parser.add_argument("--update-per-step", type=float, default=0.1)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--training-num", type=int, default=10)
+    parser.add_argument("--test-num", type=int, default=10)
     parser.add_argument("--logdir", type=str, default="log")
     parser.add_argument("--render", type=float, default=0.0)
     parser.add_argument(
@@ -51,9 +63,9 @@ def get_args() -> argparse.Namespace:
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
     )
-    parser.add_argument("--frames_stack", type=int, default=4)
-    parser.add_argument("--resume_path", type=str, default=None)
-    parser.add_argument("--resume_id", type=str, default=None)
+    parser.add_argument("--frames-stack", type=int, default=4)
+    parser.add_argument("--resume-path", type=str, default=None)
+    parser.add_argument("--resume-id", type=str, default=None)
     parser.add_argument(
         "--logger",
         type=str,
@@ -67,21 +79,21 @@ def get_args() -> argparse.Namespace:
         action="store_true",
         help="watch the play of pre-trained policy only",
     )
-    parser.add_argument("--save_buffer_name", type=str, default=None)
+    parser.add_argument("--save-buffer-name", type=str, default=None)
     parser.add_argument(
-        "--icm_lr_scale",
+        "--icm-lr-scale",
         type=float,
         default=0.0,
         help="use intrinsic curiosity module with this lr scale",
     )
     parser.add_argument(
-        "--icm_reward_scale",
+        "--icm-reward-scale",
         type=float,
         default=0.01,
         help="scaling factor for intrinsic curiosity reward",
     )
     parser.add_argument(
-        "--icm_forward_loss_weight",
+        "--icm-forward-loss-weight",
         type=float,
         default=0.2,
         help="weight for the forward model loss in ICM",
@@ -90,71 +102,63 @@ def get_args() -> argparse.Namespace:
 
 
 def main(args: argparse.Namespace = get_args()) -> None:
+    # Apply WSL time adjustment patch
+    _patch_collector_for_wsl_time()
+
     env, train_envs, test_envs = make_atari_env(
         args.task,
         args.seed,
-        args.num_train_envs,
-        args.num_test_envs,
+        args.training_num,
+        args.test_num,
         scale=args.scale_obs,
         frame_stack=args.frames_stack,
     )
-    args.state_shape = env.observation_space.shape or env.observation_space.n  # type: ignore
-    args.action_shape = env.action_space.shape or env.action_space.n  # type: ignore
+    args.state_shape = env.observation_space.shape or env.observation_space.n
+    args.action_shape = env.action_space.shape or env.action_space.n
     # should be N_FRAMES x H x W
     print("Observations shape:", args.state_shape)
     print("Actions shape:", args.action_shape)
-
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-
     # define model
-    c, h, w = args.state_shape
-    net = DQNet(c=c, h=h, w=w, action_shape=args.action_shape).to(args.device)
-    optim = AdamOptimizerFactory(lr=args.lr)
-
-    # define policy and algorithm
-    policy = DiscreteQLearningPolicy(
+    net = DQN(*args.state_shape, args.action_shape, args.device).to(args.device)
+    optim = torch.optim.Adam(net.parameters(), lr=args.lr)
+    # define policy
+    policy: DQNPolicy | ICMPolicy
+    policy = DQNPolicy(
         model=net,
-        action_space=env.action_space,
-        eps_training=args.eps_train,
-        eps_inference=args.eps_test,
-    )
-    algorithm: DQN | ICMOffPolicyWrapper
-    algorithm = DQN(
-        policy=policy,
         optim=optim,
-        gamma=args.gamma,
-        n_step_return_horizon=args.n_step,
+        action_space=env.action_space,
+        discount_factor=args.gamma,
+        estimation_step=args.n_step,
         target_update_freq=args.target_update_freq,
-        is_double=True
-    ).to(args.device)
+    )
     if args.icm_lr_scale > 0:
-        c, h, w = args.state_shape
-        feature_net = DQNet(c=c, h=h, w=w, action_shape=args.action_shape, features_only=True)
-        action_dim = int(np.prod(args.action_shape))
+        feature_net = DQN(*args.state_shape, args.action_shape, args.device, features_only=True)
+        action_dim = np.prod(args.action_shape)
         feature_dim = feature_net.output_dim
         icm_net = IntrinsicCuriosityModule(
-            feature_net=feature_net.net,
-            feature_dim=feature_dim,
-            action_dim=action_dim,
+            feature_net.net,
+            feature_dim,
+            action_dim,
             hidden_sizes=[512],
+            device=args.device,
         )
-        icm_optim = AdamOptimizerFactory(lr=args.lr)
-        algorithm = ICMOffPolicyWrapper(
-            wrapped_algorithm=algorithm,
+        icm_optim = torch.optim.Adam(icm_net.parameters(), lr=args.lr)
+        policy = ICMPolicy(
+            policy=policy,
             model=icm_net,
             optim=icm_optim,
+            action_space=env.action_space,
             lr_scale=args.icm_lr_scale,
             reward_scale=args.icm_reward_scale,
             forward_loss_weight=args.icm_forward_loss_weight,
         ).to(args.device)
-
-    # load a previous model
+    # load a previous policy
     if args.resume_path:
-        algorithm.load_state_dict(torch.load(args.resume_path, map_location=args.device))
+        policy.load_state_dict(torch.load(args.resume_path, map_location=args.device))
         print("Loaded agent from: ", args.resume_path)
-
     # replay buffer: `save_last_obs` and `stack_num` can be removed together
     # when you have enough RAM
     buffer = VectorReplayBuffer(
@@ -164,10 +168,9 @@ def main(args: argparse.Namespace = get_args()) -> None:
         save_only_last_obs=True,
         stack_num=args.frames_stack,
     )
-
-    # collectors
-    train_collector = Collector[CollectStats](algorithm, train_envs, buffer, exploration_noise=True)
-    test_collector = Collector[CollectStats](algorithm, test_envs, exploration_noise=True)
+    # collector
+    train_collector = Collector[CollectStats](policy, train_envs, buffer, exploration_noise=True)
+    test_collector = Collector[CollectStats](policy, test_envs, exploration_noise=True)
 
     # log
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
@@ -190,12 +193,12 @@ def main(args: argparse.Namespace = get_args()) -> None:
         config_dict=vars(args),
     )
 
-    def save_best_fn(fn: Algorithm) -> None:
-        torch.save(fn.state_dict(), os.path.join(log_path, "policy.pth"))
+    def save_best_fn(policy: BasePolicy) -> None:
+        torch.save(policy.state_dict(), os.path.join(log_path, "policy.pth"))
 
     def stop_fn(mean_rewards: float) -> bool:
-        if env.spec.reward_threshold:  # type: ignore
-            return mean_rewards >= env.spec.reward_threshold  # type: ignore
+        if env.spec.reward_threshold:
+            return mean_rewards >= env.spec.reward_threshold
         if "Pong" in args.task:
             return mean_rewards >= 20
         return False
@@ -206,40 +209,43 @@ def main(args: argparse.Namespace = get_args()) -> None:
             eps = args.eps_train - env_step / 1e6 * (args.eps_train - args.eps_train_final)
         else:
             eps = args.eps_train_final
-        policy.set_eps_training(eps)
+        policy.set_eps(eps)
         if env_step % 1000 == 0:
             logger.write("train/env_step", env_step, {"train/eps": eps})
+
+    def test_fn(epoch: int, env_step: int | None) -> None:
+        policy.set_eps(args.eps_test)
 
     def save_checkpoint_fn(epoch: int, env_step: int, gradient_step: int) -> str:
         # see also: https://pytorch.org/tutorials/beginner/saving_loading_models.html
         ckpt_path = os.path.join(log_path, f"checkpoint_{epoch}.pth")
-        torch.save({"model": algorithm.state_dict()}, ckpt_path)
+        torch.save({"model": policy.state_dict()}, ckpt_path)
         return ckpt_path
 
+    # watch agent's performance
     def watch() -> None:
         print("Setup test envs ...")
+        policy.set_eps(args.eps_test)
         test_envs.seed(args.seed)
         if args.save_buffer_name:
             print(f"Generate buffer with size {args.buffer_size}")
-            replay = VectorReplayBuffer(
+            buffer = VectorReplayBuffer(
                 args.buffer_size,
                 buffer_num=len(test_envs),
                 ignore_obs_next=True,
                 save_only_last_obs=True,
                 stack_num=args.frames_stack,
             )
-            collector = Collector[CollectStats](
-                algorithm, test_envs, replay, exploration_noise=True
-            )
-            data = collector.collect(n_step=args.buffer_size, reset_before_collect=True)
+            collector = Collector[CollectStats](policy, test_envs, buffer, exploration_noise=True)
+            result = collector.collect(n_step=args.buffer_size, reset_before_collect=True)
             print(f"Save buffer into {args.save_buffer_name}")
             # Unfortunately, pickle will cause oom with 1M buffer size
             buffer.save_hdf5(args.save_buffer_name)
         else:
             print("Testing agent ...")
             test_collector.reset()
-            data = test_collector.collect(n_episode=args.num_test_envs, render=args.render)
-        data.pprint_asdict()
+            result = test_collector.collect(n_episode=args.test_num, render=args.render)
+        result.pprint_asdict()
 
     if args.watch:
         watch()
@@ -247,28 +253,27 @@ def main(args: argparse.Namespace = get_args()) -> None:
 
     # test train_collector and start filling replay buffer
     train_collector.reset()
-    train_collector.collect(n_step=args.batch_size * args.num_train_envs)
-
-    # train
-    result = algorithm.run_training(
-        OffPolicyTrainerParams(
-            train_collector=train_collector,
-            test_collector=test_collector,
-            max_epochs=args.epoch,
-            epoch_num_steps=args.epoch_num_steps,
-            collection_step_num_env_steps=args.collection_step_num_env_steps,
-            test_step_num_episodes=args.num_test_envs,
-            batch_size=args.batch_size,
-            train_fn=train_fn,
-            stop_fn=stop_fn,
-            save_best_fn=save_best_fn,
-            logger=logger,
-            update_step_num_gradient_steps_per_sample=args.update_per_step,
-            test_in_train=False,
-            resume_from_log=args.resume_id is not None,
-            save_checkpoint_fn=save_checkpoint_fn,
-        )
-    )
+    train_collector.collect(n_step=args.batch_size * args.training_num)
+    # trainer
+    result = OffpolicyTrainer(
+        policy=policy,
+        train_collector=train_collector,
+        test_collector=test_collector,
+        max_epoch=args.epoch,
+        step_per_epoch=args.step_per_epoch,
+        step_per_collect=args.step_per_collect,
+        episode_per_test=args.test_num,
+        batch_size=args.batch_size,
+        train_fn=train_fn,
+        test_fn=test_fn,
+        stop_fn=stop_fn,
+        save_best_fn=save_best_fn,
+        logger=logger,
+        update_per_step=args.update_per_step,
+        test_in_train=False,
+        resume_from_log=args.resume_id is not None,
+        save_checkpoint_fn=save_checkpoint_fn,
+    ).run()
 
     pprint.pprint(result)
     watch()

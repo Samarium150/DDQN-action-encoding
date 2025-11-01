@@ -3,17 +3,18 @@ name = "DDQN-action-encoding"
 version = "0.1.0"
 description = "Exploring how different action-encoding strategies affect the performance and stability of DDQN"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
 dependencies = [
-    "gymnasium[atari]>=1.2.1",
-    "opencv-python>=4.12.0.88",
-    "tianshou>=2.0.0b2",
+    "envpool>=0.8.4; sys_platform == 'linux'",
+    "gymnasium[accept-rom-license, atari]>=0.28.1",
+    "opencv-python>=4.11.0.86",
+    "tianshou==1.2.0",
     "wandb>=0.22.3",
 ]
 
 [tool.uv.sources]
 torch = [
-  { index = "pytorch-cpu", marker = "sys_platform == 'macos'" },
+  { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
   { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
   { index = "pytorch-cu130", marker = "sys_platform == 'win32'" },
 ]
