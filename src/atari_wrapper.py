@@ -1,5 +1,4 @@
-# Borrow a lot from openai baselines:
-# https://github.com/openai/baselines/blob/master/baselines/common/atari_wrappers.py
+# https://github.com/thu-ml/tianshou/blob/v1.2.0/examples/atari/atari_wrapper.py
 import logging
 import warnings
 from collections import deque
@@ -30,9 +29,9 @@ log = logging.getLogger(__name__)
 
 def _parse_reset_result(reset_result: tuple) -> tuple[tuple, dict, bool]:
     contains_info = (
-        isinstance(reset_result, tuple)
-        and len(reset_result) == 2
-        and isinstance(reset_result[1], dict)
+            isinstance(reset_result, tuple)
+            and len(reset_result) == 2
+            and isinstance(reset_result[1], dict)
     )
     if contains_info:
         return reset_result[0], reset_result[1], contains_info
@@ -75,7 +74,8 @@ class NoopResetEnv(gym.Wrapper):
         for _ in range(noops):
             step_result = self.env.step(self.noop_action)
             if len(step_result) == 4:
-                obs, rew, done, info = step_result  # type: ignore[unreachable]  # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+                # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+                obs, rew, done, info = step_result  # type: ignore[unreachable]
             else:
                 obs, rew, term, trunc, info = step_result
                 done = term or trunc
@@ -108,7 +108,8 @@ class MaxAndSkipEnv(gym.Wrapper):
         for _ in range(self._skip):
             step_result = self.env.step(action)
             if len(step_result) == 4:
-                obs, reward, done, info = step_result  # type: ignore[unreachable]  # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+                # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+                obs, reward, done, info = step_result  # type: ignore[unreachable]
             else:
                 obs, reward, term, trunc, info = step_result
                 done = term or trunc
@@ -141,7 +142,8 @@ class EpisodicLifeEnv(gym.Wrapper):
     def step(self, action: Any) -> tuple[Any, float, bool, bool, dict[str, Any]]:
         step_result = self.env.step(action)
         if len(step_result) == 4:
-            obs, reward, done, info = step_result  # type: ignore[unreachable]  # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+            # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+            obs, reward, done, info = step_result  # type: ignore[unreachable]
             new_step_api = False
         else:
             obs, reward, term, trunc, info = step_result
@@ -302,7 +304,8 @@ class FrameStack(gym.Wrapper):
         step_result = self.env.step(action)
         done: bool
         if len(step_result) == 4:
-            obs, reward, done, info = step_result  # type: ignore[unreachable] # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+            # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+            obs, reward, done, info = step_result  # type: ignore[unreachable]
             new_step_api = False
         else:
             obs, reward, term, trunc, info = step_result
@@ -320,20 +323,20 @@ class FrameStack(gym.Wrapper):
 
 
 def wrap_deepmind(
-    env: gym.Env,
-    episode_life: bool = True,
-    clip_rewards: bool = True,
-    frame_stack: int = 4,
-    scale: bool = False,
-    warp_frame: bool = True,
+        env: gym.Env,
+        episode_life: bool = True,
+        clip_rewards: bool = True,
+        frame_stack: int = 4,
+        scale: bool = False,
+        warp_frame: bool = True,
 ) -> (
-    MaxAndSkipEnv
-    | EpisodicLifeEnv
-    | FireResetEnv
-    | WarpFrame
-    | ScaledFloatFrame
-    | ClipRewardEnv
-    | FrameStack
+        MaxAndSkipEnv
+        | EpisodicLifeEnv
+        | FireResetEnv
+        | WarpFrame
+        | ScaledFloatFrame
+        | ClipRewardEnv
+        | FrameStack
 ):
     """Configure environment for DeepMind-style Atari.
 
@@ -369,33 +372,14 @@ def wrap_deepmind(
     return wrapped_env
 
 
-def make_atari_env(
-    task: str,
-    seed: int,
-    training_num: int,
-    test_num: int,
-    scale: int | bool = False,
-    frame_stack: int = 4,
-) -> tuple[Env, BaseVectorEnv, BaseVectorEnv]:
-    """Wrapper function for Atari env.
-
-    If EnvPool is installed, it will automatically switch to EnvPool's Atari env.
-
-    :return: a tuple of (single env, training envs, test envs).
-    """
-    env_factory = AtariEnvFactory(task, frame_stack, scale=bool(scale))
-    envs = env_factory.create_envs(training_num, test_num, seed=seed)
-    return envs.env, envs.train_envs, envs.test_envs
-
-
 class AtariEnvFactory(EnvFactoryRegistered):
     def __init__(
-        self,
-        task: str,
-        frame_stack: int,
-        scale: bool = False,
-        use_envpool_if_available: bool = True,
-        venv_type: VectorEnvType = VectorEnvType.SUBPROC_SHARED_MEM_AUTO,
+            self,
+            task: str,
+            frame_stack: int,
+            scale: bool = False,
+            use_envpool_if_available: bool = True,
+            venv_type: VectorEnvType = VectorEnvType.SUBPROC_SHARED_MEM_AUTO,
     ) -> None:
         assert "NoFrameskip" in task
         self.frame_stack = frame_stack
@@ -440,7 +424,6 @@ class AtariEnvFactory(EnvFactoryRegistered):
 
         def _transform_task(self, task: str) -> str:
             task = super()._transform_task(task)
-            # TODO: Maybe warn user, explain why this is needed
             return task.replace("NoFrameskip-v4", "-v5")
 
         def _transform_kwargs(self, kwargs: dict, mode: EnvMode) -> dict:
@@ -463,3 +446,22 @@ class AtariEpochStopCallback(EpochStopCallback):
         if "Pong" in self.task:
             return mean_rewards >= 20
         return False
+
+
+def make_atari_env(
+        task: str,
+        seed: int,
+        training_num: int,
+        test_num: int,
+        scale: int | bool = False,
+        frame_stack: int = 4,
+) -> tuple[Env, BaseVectorEnv, BaseVectorEnv]:
+    """Wrapper function for Atari env.
+
+    If EnvPool is installed, it will automatically switch to EnvPool's Atari env.
+
+    :return: a tuple of (single env, training envs, test envs).
+    """
+    env_factory = AtariEnvFactory(task, frame_stack, scale=bool(scale))
+    envs = env_factory.create_envs(training_num, test_num, seed=seed)
+    return envs.env, envs.train_envs, envs.test_envs
