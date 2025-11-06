@@ -4,6 +4,7 @@ from typing import Any
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from tianshou.utils.net.common import NetBase
 
@@ -15,9 +16,11 @@ def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.
 
 
 class DQN(NetBase[Any]):
-    """classic DQN network
+    """DQN with separate action encoder and mid-layer fusion.
 
-    https://github.com/thu-ml/tianshou/blob/v1.2.0/examples/atari/atari_network.py
+    - CNN encodes the state.
+    - MLP encodes the one-hot action vector.
+    - Features are concatenated and passed through FC layers to predict Q(s,a).
     """
 
     def __init__(
@@ -29,7 +32,8 @@ class DQN(NetBase[Any]):
             device: str | int | torch.device = "cpu",
             features_only: bool = False,
             output_dim_added_layer: int | None = None,
-            layer_initializer: Callable[[nn.Module], nn.Module] = lambda layer: layer_init(layer),
+            layer_initializer: Callable[[nn.Module], nn.Module] = lambda l: layer_init(l),
+            action_embed_dim: int = 64,
     ) -> None:
         if not features_only and output_dim_added_layer is not None:
             raise ValueError(
@@ -37,7 +41,10 @@ class DQN(NetBase[Any]):
             )
         super().__init__()
         self.device = device
-        self.net = nn.Sequential(
+        self.action_dim = int(np.prod(action_shape))
+        self.action_embed_dim = action_embed_dim
+        # === CNN encoder for state ===
+        self.state_net = nn.Sequential(
             layer_initializer(nn.Conv2d(c, 32, kernel_size=8, stride=4)),
             nn.ReLU(inplace=True),
             layer_initializer(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
@@ -46,26 +53,35 @@ class DQN(NetBase[Any]):
             nn.ReLU(inplace=True),
             nn.Flatten(),
         )
+
+        # Determine flattened feature size after CNN
         with torch.no_grad():
-            base_cnn_output_dim = int(np.prod(self.net(torch.zeros(1, c, h, w)).shape[1:]))
+            dummy = torch.zeros(1, c, h, w)
+            state_feat_dim = int(np.prod(self.state_net(dummy).shape[1:]))
+
+        # === Separate encoder for one-hot action ===
+        self.action_encoder = nn.Sequential(
+            layer_initializer(nn.Linear(self.action_dim, action_embed_dim)),
+            nn.ReLU(inplace=True),
+        )
+
+        # === Fusion head ===
         if not features_only:
-            action_dim = int(np.prod(action_shape))
             self.net = nn.Sequential(
-                self.net,
-                layer_initializer(nn.Linear(base_cnn_output_dim, 512)),
+                layer_initializer(nn.Linear(state_feat_dim + action_embed_dim, 512)),
                 nn.ReLU(inplace=True),
-                layer_initializer(nn.Linear(512, action_dim)),
+                layer_initializer(nn.Linear(512, 1)),
             )
-            self.output_dim = action_dim
+            self.output_dim = self.action_dim
         elif output_dim_added_layer is not None:
             self.net = nn.Sequential(
-                self.net,
-                layer_initializer(nn.Linear(base_cnn_output_dim, output_dim_added_layer)),
+                layer_initializer(nn.Linear(state_feat_dim + action_embed_dim, output_dim_added_layer)),
                 nn.ReLU(inplace=True),
             )
             self.output_dim = output_dim_added_layer
         else:
-            self.output_dim = base_cnn_output_dim
+            self.output_dim = state_feat_dim + action_embed_dim
+
 
     def forward(
             self,
@@ -74,6 +90,25 @@ class DQN(NetBase[Any]):
             info: dict[str, Any] | None = None,
             **kwargs: Any,
     ) -> tuple[torch.Tensor, Any]:
-        """Mapping: s -> Q(s, *)."""
-        obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
-        return self.net(obs), state
+        """Compute Q(s,·) by separately encoding action and state, then fusing."""
+        obs_t = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+        batch_size = obs_t.shape[0]
+
+        # Encode the state through CNN
+        s_feat = self.state_net(obs_t)
+
+
+        # Precompute all one-hot action embeddings
+        eye = torch.eye(self.action_dim, device=self.device)
+        a_embeds = self.action_encoder(eye)  # (num_actions, action_embed_dim)
+
+
+        q_list = []
+        for a_idx in range(self.action_dim):
+            a_feat = a_embeds[a_idx].unsqueeze(0).expand(batch_size, -1)  # (B, action_embed_dim)
+            sa_feat = torch.cat([s_feat, a_feat], dim=1)
+            q_val = self.net(sa_feat)  # (B, 1)
+            q_list.append(q_val)
+
+        q_values = torch.cat(q_list, dim=1)  # (B, num_actions)
+        return q_values, state

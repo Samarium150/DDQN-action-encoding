@@ -90,13 +90,10 @@ def main(args: argparse.Namespace = get_args()) -> None:
     )
     args.state_shape = env.observation_space.shape or env.observation_space.n
     args.action_shape = env.action_space.shape or env.action_space.n
-    # should be N_FRAMES x H x W
     print("Observations shape:", args.state_shape)
     print("Actions shape:", args.action_shape)
-    # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    # define model
     net = DQN(*args.state_shape, args.action_shape, args.device).to(args.device)
     optim = torch.optim.Adam(net.parameters(), lr=args.lr)
     policy = DQNPolicy(
@@ -107,11 +104,9 @@ def main(args: argparse.Namespace = get_args()) -> None:
         estimation_step=args.n_step,
         target_update_freq=args.target_update_freq,
     )
-    # load a previous policy
     if args.resume_path:
         policy.load_state_dict(torch.load(args.resume_path, map_location=args.device))
         print("Loaded agent from: ", args.resume_path)
-    # replay buffer: `save_only_last_obs` and `stack_num` can be removed together when you have enough RAM
     buffer = VectorReplayBuffer(
         args.buffer_size,
         buffer_num=len(train_envs),
@@ -119,24 +114,18 @@ def main(args: argparse.Namespace = get_args()) -> None:
         save_only_last_obs=True,
         stack_num=args.frames_stack,
     )
-    # collector
     train_collector = Collector[CollectStats](policy, train_envs, buffer, exploration_noise=True)
     test_collector = Collector[CollectStats](policy, test_envs, exploration_noise=True)
-
-    # log
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
     args.algo_name = "dqn"
     log_name = os.path.join(args.task, args.algo_name, str(args.seed), now)
     log_path = os.path.join(args.logdir, log_name)
-
-    # logger
     logger_factory = LoggerFactoryDefault()
     if args.logger == "wandb":
         logger_factory.logger_type = "wandb"
         logger_factory.wandb_project = args.wandb_project
     else:
         logger_factory.logger_type = "tensorboard"
-
     logger = logger_factory.create_logger(
         log_dir=log_path,
         experiment_name=log_name,
@@ -155,7 +144,6 @@ def main(args: argparse.Namespace = get_args()) -> None:
         return False
 
     def train_fn(epoch: int, env_step: int) -> None:
-        # nature DQN setting, linear decay in the first 1M steps
         if env_step <= 1e6:
             eps = args.eps_train - env_step / 1e6 * (args.eps_train - args.eps_train_final)
         else:
@@ -163,17 +151,19 @@ def main(args: argparse.Namespace = get_args()) -> None:
         policy.set_eps(eps)
         if env_step % 1000 == 0:
             logger.write("train/env_step", env_step, {"train/eps": eps})
+        # DEBUG print for training progress
+        print(f"[TRAIN] epoch={epoch}, env_step={env_step}, eps={eps:.4f}")
 
     def test_fn(epoch: int, env_step: int | None) -> None:
         policy.set_eps(args.eps_test)
+        # DEBUG print for testing start
+        print(f"[TEST] epoch={epoch}, env_step={env_step}")
 
     def save_checkpoint_fn(epoch: int, env_step: int, gradient_step: int) -> str:
-        # see also: https://pytorch.org/tutorials/beginner/saving_loading_models.html
         ckpt_path = os.path.join(log_path, f"checkpoint_{epoch}.pth")
         torch.save({"model": policy.state_dict()}, ckpt_path)
         return ckpt_path
 
-    # watch agent's performance
     def watch() -> None:
         print("Setup test envs ...")
         policy.set_eps(args.eps_test)
@@ -191,22 +181,27 @@ def main(args: argparse.Namespace = get_args()) -> None:
             collector = Collector[CollectStats](policy, test_envs, vrb, exploration_noise=True)
             collected = collector.collect(n_step=args.buffer_size, reset_before_collect=True)
             print(f"Save buffer into {args.save_buffer_name}")
-            # Unfortunately, pickle will cause oom with 1M buffer size
             buffer.save_hdf5(args.save_buffer_name)
         else:
             print("Testing agent ...")
             test_collector.reset()
             collected = test_collector.collect(n_episode=args.test_num, render=args.render)
+        # DEBUG print test rewards
+        print(f"[WATCH] mean_reward={collected.returns.mean():.3f}, "
+              f"steps={collected.n_collected_steps}, "
+              f"episodes={collected.n_collected_episodes}")
         collected.pprint_asdict()
 
     if args.watch:
         watch()
         sys.exit(0)
 
-    # test train_collector and start filling replay buffer
     train_collector.reset()
-    train_collector.collect(n_step=args.batch_size * args.training_num)
-    # trainer
+    init_collected = train_collector.collect(n_step=args.batch_size * args.training_num)
+    # DEBUG initial buffer fill info
+    print(f"[INIT] collected {init_collected.n_collected_steps} steps, "
+          f"mean_reward={init_collected.returns.mean():.3f}")
+
     result = OffpolicyTrainer(
         policy=policy,
         train_collector=train_collector,
@@ -227,6 +222,10 @@ def main(args: argparse.Namespace = get_args()) -> None:
         save_checkpoint_fn=save_checkpoint_fn,
     ).run()
 
+    # DEBUG print final results
+    print(f"[RESULT] best_reward={result['best_reward']}, "
+          f"env_step={result['env_step']}, "
+          f"gradient_step={result['gradient_step']}")
     pprint.pprint(result)
     watch()
 
