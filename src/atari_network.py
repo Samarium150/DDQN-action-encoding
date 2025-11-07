@@ -14,7 +14,7 @@ def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.
 
 
 class DQN(NetBase[Any]):
-    """classic DQN network with dueling support
+    """Classic DQN network with dueling support
 
     https://github.com/thu-ml/tianshou/blob/v1.2.0/examples/atari/atari_network.py
     """

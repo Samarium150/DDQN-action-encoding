@@ -8,7 +8,6 @@ import cv2
 import gymnasium as gym
 import numpy as np
 from gymnasium import Env
-
 from tianshou.env import BaseVectorEnv
 from tianshou.highlevel.env import (
     EnvFactoryRegistered,
@@ -53,12 +52,12 @@ def get_space_dtype(obs_space: gym.spaces.Box) -> type[np.floating] | type[np.in
 
 
 class NoopResetEnv(gym.Wrapper):
-    """Sample initial states by taking random number of no-ops on reset.
+    """Sample initial states by taking a random number of no-ops on reset.
 
     No-op is assumed to be action 0.
 
-    :param gym.Env env: the environment to wrap.
-    :param int noop_max: the maximum value of no-ops to run.
+    :param gym.Env env: The environment to wrap.
+    :param int noop_max: The maximum value of no-ops to run.
     """
 
     def __init__(self, env: gym.Env, noop_max: int = 30) -> None:
@@ -66,6 +65,7 @@ class NoopResetEnv(gym.Wrapper):
         self.noop_max = noop_max
         self.noop_action = 0
         assert hasattr(env.unwrapped, "get_action_meanings")
+        # noinspection PyUnresolvedReferences
         assert env.unwrapped.get_action_meanings()[0] == "NOOP"
 
     def reset(self, **kwargs: Any) -> tuple[Any, dict[str, Any]]:
@@ -75,6 +75,7 @@ class NoopResetEnv(gym.Wrapper):
             step_result = self.env.step(self.noop_action)
             if len(step_result) == 4:
                 # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+                # noinspection PyTupleAssignmentBalance
                 obs, rew, done, info = step_result  # type: ignore[unreachable]
             else:
                 obs, rew, term, trunc, info = step_result
@@ -82,15 +83,18 @@ class NoopResetEnv(gym.Wrapper):
             if done:
                 obs, info, _ = _parse_reset_result(self.env.reset())
         if return_info:
+            # noinspection PyUnboundLocalVariable
             return obs, info
+        # noinspection PyUnboundLocalVariable
         return obs, {}
 
 
 class MaxAndSkipEnv(gym.Wrapper):
-    """Return only every `skip`-th frame (frameskipping) using most recent raw observations (for max pooling across time steps).
+    """Return only every `skip`-th frame (frame-skipping) using the most recent raw observations
+    (for max pooling across time steps).
 
-    :param gym.Env env: the environment to wrap.
-    :param int skip: number of `skip`-th frame.
+    :param gym.Env env: The environment to wrap.
+    :param int skip: Number of `skip`-th frames.
     """
 
     def __init__(self, env: gym.Env, skip: int = 4) -> None:
@@ -98,7 +102,7 @@ class MaxAndSkipEnv(gym.Wrapper):
         self._skip = skip
 
     def step(self, action: Any) -> tuple[Any, float, bool, bool, dict[str, Any]]:
-        """Step the environment with the given action.
+        """Make a step in the environment with the given action.
 
         Repeat action, sum reward, and max over last observations.
         """
@@ -109,6 +113,7 @@ class MaxAndSkipEnv(gym.Wrapper):
             step_result = self.env.step(action)
             if len(step_result) == 4:
                 # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+                # noinspection PyTupleAssignmentBalance
                 obs, reward, done, info = step_result  # type: ignore[unreachable]
             else:
                 obs, reward, term, trunc, info = step_result
@@ -120,8 +125,9 @@ class MaxAndSkipEnv(gym.Wrapper):
                 break
         max_frame = np.max(obs_list[-2:], axis=0)
         if new_step_api:
+            # noinspection PyUnboundLocalVariable
             return max_frame, total_reward, term, trunc, info
-
+        # noinspection PyUnboundLocalVariable
         return max_frame, total_reward, done, info.get("TimeLimit.truncated", False), info
 
 
@@ -130,7 +136,7 @@ class EpisodicLifeEnv(gym.Wrapper):
 
     It helps the value estimation.
 
-    :param gym.Env env: the environment to wrap.
+    :param gym.Env env: The environment to wrap.
     """
 
     def __init__(self, env: gym.Env) -> None:
@@ -143,6 +149,7 @@ class EpisodicLifeEnv(gym.Wrapper):
         step_result = self.env.step(action)
         if len(step_result) == 4:
             # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+            # noinspection PyTupleAssignmentBalance
             obs, reward, done, info = step_result  # type: ignore[unreachable]
             new_step_api = False
         else:
@@ -154,15 +161,17 @@ class EpisodicLifeEnv(gym.Wrapper):
         # check current lives, make loss of life terminal, then update lives to
         # handle bonus lives
         assert hasattr(self.env.unwrapped, "ale")
+        # noinspection PyUnresolvedReferences
         lives = self.env.unwrapped.ale.lives()
         if 0 < lives < self.lives:
             # for Qbert sometimes we stay in lives == 0 condition for a few
-            # frames, so its important to keep lives > 0, so that we only reset
+            # frames, so it's important to keep lives > 0, so that we only reset
             # once the environment is actually done.
             done = True
             term = True
         self.lives = lives
         if new_step_api:
+            # noinspection PyUnboundLocalVariable
             return obs, reward, term, trunc, info
         return obs, reward, done, info.get("TimeLimit.truncated", False), info
 
@@ -179,6 +188,7 @@ class EpisodicLifeEnv(gym.Wrapper):
             step_result = self.env.step(0)
             obs, info = step_result[0], step_result[-1]
         assert hasattr(self.env.unwrapped, "ale")
+        # noinspection PyUnresolvedReferences
         self.lives = self.env.unwrapped.ale.lives()
         if self._return_info:
             return obs, info
@@ -190,13 +200,15 @@ class FireResetEnv(gym.Wrapper):
 
     Related discussion: https://github.com/openai/baselines/issues/240.
 
-    :param gym.Env env: the environment to wrap.
+    :param gym.Env env: The environment to wrap.
     """
 
     def __init__(self, env: gym.Env) -> None:
         super().__init__(env)
         assert hasattr(env.unwrapped, "get_action_meanings")
+        # noinspection PyUnresolvedReferences
         assert env.unwrapped.get_action_meanings()[1] == "FIRE"
+        # noinspection PyUnresolvedReferences
         assert len(env.unwrapped.get_action_meanings()) >= 3
 
     def reset(self, **kwargs: Any) -> tuple[Any, dict]:
@@ -208,7 +220,7 @@ class FireResetEnv(gym.Wrapper):
 class WarpFrame(gym.ObservationWrapper):
     """Warp frames to 84x84 as done in the Nature paper and later work.
 
-    :param gym.Env env: the environment to wrap.
+    :param gym.Env env: The environment to wrap.
     """
 
     def __init__(self, env: gym.Env) -> None:
@@ -233,7 +245,7 @@ class WarpFrame(gym.ObservationWrapper):
 class ScaledFloatFrame(gym.ObservationWrapper):
     """Normalize observations to 0~1.
 
-    :param gym.Env env: the environment to wrap.
+    :param gym.Env env: The environment to wrap.
     """
 
     def __init__(self, env: gym.Env) -> None:
@@ -273,8 +285,8 @@ class ClipRewardEnv(gym.RewardWrapper):
 class FrameStack(gym.Wrapper):
     """Stack n_frames last frames.
 
-    :param gym.Env env: the environment to wrap.
-    :param int n_frames: the number of frames to stack.
+    :param gym.Env env: The environment to wrap.
+    :param int n_frames: The number of frames to stack.
     """
 
     def __init__(self, env: gym.Env, n_frames: int) -> None:
@@ -305,6 +317,7 @@ class FrameStack(gym.Wrapper):
         done: bool
         if len(step_result) == 4:
             # mypy doesn't know that Gym version <0.26 has only 4 items (no truncation)
+            # noinspection PyTupleAssignmentBalance
             obs, reward, done, info = step_result  # type: ignore[unreachable]
             new_step_api = False
         else:
@@ -313,11 +326,13 @@ class FrameStack(gym.Wrapper):
         self.frames.append(obs)
         reward = float(reward)
         if new_step_api:
+            # noinspection PyUnboundLocalVariable
             return self._get_ob(), reward, term, trunc, info
+        # noinspection PyUnboundLocalVariable
         return self._get_ob(), reward, done, info.get("TimeLimit.truncated", False), info
 
     def _get_ob(self) -> np.ndarray:
-        # the original wrapper use `LazyFrames` but since we use np buffer,
+        # the original wrapper uses `LazyFrames` but since we use np buffer,
         # it has no effect
         return np.stack(self.frames, axis=0)
 
@@ -338,17 +353,17 @@ def wrap_deepmind(
         | ClipRewardEnv
         | FrameStack
 ):
-    """Configure environment for DeepMind-style Atari.
+    """Configure the environment for DeepMind-style Atari.
 
     The observation is channel-first: (c, h, w) instead of (h, w, c).
 
-    :param env: the Atari environment to wrap.
-    :param bool episode_life: wrap the episode life wrapper.
-    :param bool clip_rewards: wrap the reward clipping wrapper.
-    :param int frame_stack: wrap the frame stacking wrapper.
-    :param bool scale: wrap the scaling observation wrapper.
-    :param bool warp_frame: wrap the grayscale + resize observation wrapper.
-    :return: the wrapped atari environment.
+    :param env: The Atari environment to wrap.
+    :param bool episode_life: Wrap the episode life wrapper.
+    :param bool clip_rewards: Wrap the reward clipping wrapper.
+    :param int frame_stack: Wrap the frame stacking wrapper.
+    :param bool scale: Wrap the scaling observation wrapper.
+    :param bool warp_frame: Wrap the grayscale and resize the observation wrapper.
+    :return: The wrapped atari environment.
     """
     env = NoopResetEnv(env, noop_max=30)
     env = MaxAndSkipEnv(env, skip=4)
@@ -359,6 +374,7 @@ def wrap_deepmind(
     )
     if episode_life:
         wrapped_env = EpisodicLifeEnv(wrapped_env)
+    # noinspection PyUnresolvedReferences
     if "FIRE" in env.unwrapped.get_action_meanings():
         wrapped_env = FireResetEnv(wrapped_env)
     if warp_frame:
@@ -460,7 +476,7 @@ def make_atari_env(
 
     If EnvPool is installed, it will automatically switch to EnvPool's Atari env.
 
-    :return: a tuple of (single env, training envs, test envs).
+    :return: A tuple of (single env, training envs, test envs).
     """
     env_factory = AtariEnvFactory(task, frame_stack, scale=bool(scale))
     envs = env_factory.create_envs(training_num, test_num, seed=seed)
