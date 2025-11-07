@@ -8,15 +8,15 @@ import sys
 import ale_py
 import numpy as np
 import torch
-
-from atari_network import DQN
-from atari_wrapper import make_atari_env
-
 from tianshou.data import Collector, CollectStats, VectorReplayBuffer
 from tianshou.highlevel.logger import LoggerFactoryDefault
 from tianshou.policy import DQNPolicy
 from tianshou.policy.base import BasePolicy
 from tianshou.trainer import OffpolicyTrainer
+from tianshou.utils.net.common import NetBase
+
+from atari_network import DQN
+from atari_wrapper import make_atari_env
 
 
 def _patch_collector_for_wsl_time():
@@ -74,6 +74,7 @@ def get_args() -> argparse.Namespace:
         help="watch the play of pre-trained policy only",
     )
     parser.add_argument("--save-buffer-name", type=str, default=None)
+    parser.add_argument("--network", default="classic")
     return parser.parse_args()
 
 
@@ -88,17 +89,26 @@ def main(args: argparse.Namespace = get_args()) -> None:
         scale=args.scale_obs,
         frame_stack=args.frames_stack,
     )
+    # noinspection PyUnresolvedReferences
     args.state_shape = env.observation_space.shape or env.observation_space.n
+    # noinspection PyUnresolvedReferences
     args.action_shape = env.action_space.shape or env.action_space.n
     # should be N_FRAMES x H x W
     print("Observations shape:", args.state_shape)
     print("Actions shape:", args.action_shape)
-    # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    # define model
-    net = DQN(*args.state_shape, args.action_shape, args.device).to(args.device)
+    net: NetBase
+    match args.network:
+        case "dueling":
+            q_params = v_params = {"hidden_sizes": [128]}
+            net = DQN(*args.state_shape, args.action_shape, args.device, dueling_param=(q_params, v_params)).to(
+                args.device)
+        case _:
+            net = DQN(*args.state_shape, args.action_shape, args.device).to(args.device)
+    # noinspection PyUnboundLocalVariable
     optim = torch.optim.Adam(net.parameters(), lr=args.lr)
+    # noinspection PyTypeChecker
     policy = DQNPolicy(
         model=net,
         optim=optim,
@@ -154,6 +164,7 @@ def main(args: argparse.Namespace = get_args()) -> None:
             return mean_rewards >= 20
         return False
 
+    # noinspection PyUnusedLocal
     def train_fn(epoch: int, env_step: int) -> None:
         # nature DQN setting, linear decay in the first 1M steps
         if env_step <= 1e6:
@@ -164,9 +175,11 @@ def main(args: argparse.Namespace = get_args()) -> None:
         if env_step % 1000 == 0:
             logger.write("train/env_step", env_step, {"train/eps": eps})
 
+    # noinspection PyUnusedLocal
     def test_fn(epoch: int, env_step: int | None) -> None:
         policy.set_eps(args.eps_test)
 
+    # noinspection PyUnusedLocal
     def save_checkpoint_fn(epoch: int, env_step: int, gradient_step: int) -> str:
         # see also: https://pytorch.org/tutorials/beginner/saving_loading_models.html
         ckpt_path = os.path.join(log_path, f"checkpoint_{epoch}.pth")
@@ -203,7 +216,7 @@ def main(args: argparse.Namespace = get_args()) -> None:
         watch()
         sys.exit(0)
 
-    # test train_collector and start filling replay buffer
+    # test train_collector and start filling the replay buffer
     train_collector.reset()
     train_collector.collect(n_step=args.batch_size * args.training_num)
     # trainer
