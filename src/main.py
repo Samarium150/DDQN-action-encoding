@@ -15,7 +15,7 @@ from tianshou.policy.base import BasePolicy
 from tianshou.trainer import OffpolicyTrainer
 from tianshou.utils.net.common import NetBase
 
-from atari_network import DQN
+from atari_network import ActionConcatenatedDQN, DQN
 from atari_wrapper import make_atari_env
 
 
@@ -104,7 +104,9 @@ def main(args: argparse.Namespace = get_args()) -> None:
             q_params = v_params = {"hidden_sizes": [128]}
             net = DQN(*args.state_shape, args.action_shape, args.device, dueling_param=(q_params, v_params)).to(
                 args.device)
-        case _:
+        case "concat":
+            net = ActionConcatenatedDQN(*args.state_shape, args.action_shape, args.device).to(args.device)
+        case _:  # classic
             net = DQN(*args.state_shape, args.action_shape, args.device).to(args.device)
     # noinspection PyUnboundLocalVariable
     optim = torch.optim.Adam(net.parameters(), lr=args.lr)

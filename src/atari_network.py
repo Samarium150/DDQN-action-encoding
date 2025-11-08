@@ -3,7 +3,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from tianshou.utils.net.common import NetBase, MLP
+from tianshou.utils.net.common import NetBase, MLP, TRecurrentState
 from torch import nn
 
 
@@ -26,7 +26,7 @@ class DQN(NetBase[Any]):
             w: int,
             action_shape: Sequence[int] | int,
             device: str | int | torch.device = "cpu",
-            feature_dim=512,
+            feature_dim: int = 512,
             dueling_param: tuple[dict[str, Any], dict[str, Any]] | None = None,
             layer_initializer: Callable[[nn.Module], nn.Module] = lambda layer: layer_init(layer),
     ) -> None:
@@ -68,14 +68,9 @@ class DQN(NetBase[Any]):
         else:
             self.head = layer_initializer(nn.Linear(feature_dim, self.output_dim))
 
-    def forward(
-            self,
-            obs: np.ndarray | torch.Tensor,
-            state: Any | None = None,
-            info: dict[str, Any] | None = None,
-            **kwargs: Any,
-    ) -> tuple[torch.Tensor, Any]:
-        """Mapping: s -> Q(s, *)."""
+    def forward(self, obs: np.ndarray | torch.Tensor, state: TRecurrentState | None = None,
+                info: dict[str, Any] | None = None) -> tuple[torch.Tensor, TRecurrentState | None]:
+        """Mapping: s -> Q(s, *)"""
         obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
         features = self.net(obs)
         if self.use_dueling:  # Dueling DQN
@@ -84,3 +79,84 @@ class DQN(NetBase[Any]):
         else:
             logits = self.head(features)
         return logits, state
+
+
+class ActionConcatenatedDQN(NetBase[Any]):
+    """
+    DQN network that concatenates the one-hot action vector with the state before feature extraction
+    """
+
+    def __init__(
+            self,
+            c: int,
+            h: int,
+            w: int,
+            action_shape: Sequence[int] | int,
+            device: str | int | torch.device = "cpu",
+            feature_dim: int = 512,
+            layer_initializer: Callable[[nn.Module], nn.Module] = lambda layer: layer_init(layer),
+    ) -> None:
+        super().__init__()
+        self.device = device
+        action_dim = int(np.prod(action_shape))
+        self.output_dim = action_dim
+        self.h = h
+        self.w = w
+        # CNN extracts features from both the state and the actions
+        cnn = nn.Sequential(
+            layer_initializer(nn.Conv2d(c + action_dim, 32, kernel_size=8, stride=4)),
+            nn.ReLU(inplace=True),
+            layer_initializer(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
+            nn.ReLU(inplace=True),
+            layer_initializer(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
+            nn.ReLU(inplace=True),
+            nn.Flatten(),
+        )
+        with torch.no_grad():
+            cnn_output_dim = int(np.prod(cnn(torch.zeros(1, c + action_dim, h, w)).shape[1:]))
+        self.net = nn.Sequential(
+            cnn,
+            layer_initializer(nn.Linear(cnn_output_dim, feature_dim)),
+            nn.ReLU(inplace=True),
+            layer_initializer(nn.Linear(feature_dim, 1)),
+        )
+
+    def forward(self, obs: np.ndarray | torch.Tensor, state: TRecurrentState | None = None,
+                info: dict[str, Any] | None = None) -> tuple[torch.Tensor, TRecurrentState | None]:
+        """Mapping: s -> Q(s, *)
+
+        For each action, concatenate a one-hot encoding with the observation,
+        then process through the network to get Q(s, a).
+        """
+        obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+        batch_size, _, h, w = obs.shape
+
+        # Create one-hot encodings for all actions: (action_dim, action_dim)
+        action_encodings = torch.eye(self.output_dim, device=self.device, dtype=torch.float32)
+
+        # Expand to spatial dimensions: (action_dim, action_dim, h, w)
+        action_grids = action_encodings[:, :, None, None].expand(-1, -1, h, w)
+
+        # Expand obs for all actions: (batch_size, c, h, w) -> (batch_size, 1, c, h, w)
+        obs_expanded = obs.unsqueeze(1)
+
+        # Expand action grids for batch: (action_dim, action_dim, h, w) -> (1, action_dim, action_dim, h, w)
+        action_grids_expanded = action_grids.unsqueeze(0)
+
+        # Concatenate obs with each action encoding
+        # (batch_size, action_dim, c + action_dim, h, w)
+        combined = torch.cat([
+            obs_expanded.expand(-1, self.output_dim, -1, -1, -1),
+            action_grids_expanded.expand(batch_size, -1, -1, -1, -1)
+        ], dim=2)
+
+        # Reshape to process all (batch, action) pairs: (batch_size * action_dim, c + action_dim, h, w)
+        combined = combined.view(batch_size * self.output_dim, -1, h, w)
+
+        # Pass through the network to get Q-values: (batch_size * action_dim, 1)
+        q_values = self.net(combined)
+
+        # Reshape to (batch_size, action_dim)
+        q_values = q_values.view(batch_size, self.output_dim)
+
+        return q_values, state
