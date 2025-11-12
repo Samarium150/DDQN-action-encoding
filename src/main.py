@@ -3,6 +3,7 @@ import datetime
 import os
 import pprint
 import sys
+import time
 
 # noinspection PyUnusedImports
 import ale_py
@@ -75,6 +76,7 @@ def get_args() -> argparse.Namespace:
     )
     parser.add_argument("--save-buffer-name", type=str, default=None)
     parser.add_argument("--network", default="classic")
+    parser.add_argument("--verbose", default=False)
     return parser.parse_args()
 
 
@@ -156,6 +158,8 @@ def main(args: argparse.Namespace = get_args()) -> None:
         config_dict=vars(args),
     )
 
+    train_start_time = time.time()
+
     def save_best_fn(p: BasePolicy) -> None:
         torch.save(p.state_dict(), os.path.join(log_path, "policy.pth"))
 
@@ -175,7 +179,11 @@ def main(args: argparse.Namespace = get_args()) -> None:
             eps = args.eps_train_final
         policy.set_eps(eps)
         if env_step % 1000 == 0:
-            logger.write("train/env_step", env_step, {"train/eps": eps})
+            elapsed = time.time() - train_start_time
+            logger.write("train/env_step", env_step, {
+                "train/eps": eps,
+                "train/time_elapsed_stepwise": elapsed,
+            })
 
     # noinspection PyUnusedLocal
     def test_fn(epoch: int, env_step: int | None) -> None:
@@ -240,6 +248,8 @@ def main(args: argparse.Namespace = get_args()) -> None:
         test_in_train=False,
         resume_from_log=args.resume_id is not None,
         save_checkpoint_fn=save_checkpoint_fn,
+        verbose=args.verbose,
+        show_progress=args.verbose
     ).run()
 
     pprint.pprint(result)
