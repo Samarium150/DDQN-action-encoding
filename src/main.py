@@ -3,6 +3,7 @@ import datetime
 import os
 import pprint
 import sys
+import time
 
 # noinspection PyUnusedImports
 import ale_py
@@ -156,6 +157,8 @@ def main(args: argparse.Namespace = get_args()) -> None:
         config_dict=vars(args),
     )
 
+    train_start_time = time.time()
+
     def save_best_fn(p: BasePolicy) -> None:
         torch.save(p.state_dict(), os.path.join(log_path, "policy.pth"))
 
@@ -175,7 +178,11 @@ def main(args: argparse.Namespace = get_args()) -> None:
             eps = args.eps_train_final
         policy.set_eps(eps)
         if env_step % 1000 == 0:
-            logger.write("train/env_step", env_step, {"train/eps": eps})
+            elapsed = time.time() - train_start_time
+            logger.write("train/env_step", env_step, {
+                "train/eps": eps,
+                "train/time_elapsed_stepwise": elapsed,
+            })
 
     # noinspection PyUnusedLocal
     def test_fn(epoch: int, env_step: int | None) -> None:
