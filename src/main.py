@@ -16,7 +16,7 @@ from tianshou.policy.base import BasePolicy
 from tianshou.trainer import OffpolicyTrainer
 from tianshou.utils.net.common import NetBase
 
-from atari_network import ActionConcatenatedDQN, DQN
+from atari_network import ActionConcatenatedDQN, DQN, MultiHeadDQN
 from atari_wrapper import make_atari_env
 
 
@@ -108,6 +108,8 @@ def main(args: argparse.Namespace = get_args()) -> None:
                 args.device)
         case "concat":
             net = ActionConcatenatedDQN(*args.state_shape, args.action_shape, args.device).to(args.device)
+        case "multihead":
+            net = MultiHeadDQN(*args.state_shape, args.action_shape, args.device).to(args.device)
         case _:  # classic
             net = DQN(*args.state_shape, args.action_shape, args.device).to(args.device)
     # noinspection PyUnboundLocalVariable
