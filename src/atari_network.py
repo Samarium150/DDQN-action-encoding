@@ -112,6 +112,7 @@ class ActionConcatenatedDQN(NetBase[Any]):
                 layer_initializer(nn.Linear(action_dim, self.action_encoding_dim)),
                 nn.ReLU(inplace=True),
             )
+        self.actions = torch.eye(action_dim, dtype=torch.float32)
         # CNN extracts features from both the state and the actions
         cnn = nn.Sequential(
             layer_initializer(nn.Conv2d(c + self.action_encoding_dim, 32, kernel_size=8, stride=4)),
@@ -141,10 +142,8 @@ class ActionConcatenatedDQN(NetBase[Any]):
         obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
         batch_size, _, h, w = obs.shape
 
-        # Create one-hot encodings for all actions: (action_dim, action_dim)
-        action_encodings = torch.eye(self.output_dim, device=self.device, dtype=torch.float32)
-        encoded_actions = self.action_encoder(action_encodings)  # (action_dim, action_encoding_dim)
-
+        # (action_dim, action_encoding_dim)
+        encoded_actions = self.action_encoder(self.actions)
         # Expand to spatial dimensions: (action_dim, action_encoding_dim, h, w)
         action_grids = encoded_actions[:, :, None, None].expand(-1, -1, h, w)
 
@@ -157,13 +156,12 @@ class ActionConcatenatedDQN(NetBase[Any]):
 
         # Concatenate obs with each action encoding
         # (batch_size, action_dim, c + action_encoding_dim, h, w)
+        # Reshape to process all (batch, action) pairs:
+        # (batch_size * action_dim, c + action_encoding_dim, h, w)
         combined = torch.cat([
             obs_expanded.expand(-1, self.output_dim, -1, -1, -1),
             action_grids_expanded.expand(batch_size, -1, -1, -1, -1)
-        ], dim=2)
-
-        # Reshape to process all (batch, action) pairs: (batch_size * action_dim, c + action_encoding_dim, h, w)
-        combined = combined.view(batch_size * self.output_dim, -1, h, w)
+        ], dim=2).contiguous().view(batch_size * self.output_dim, -1, h, w)
 
         # Pass through the network to get Q-values: (batch_size * action_dim, 1)
         q_values = self.net(combined)
