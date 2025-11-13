@@ -16,7 +16,7 @@ from tianshou.policy.base import BasePolicy
 from tianshou.trainer import OffpolicyTrainer
 from tianshou.utils.net.common import NetBase
 
-from atari_network import ActionConcatenatedDQN, DQN, MultiHeadDQN
+from atari_network import ActionConcatenatedDQN, ActionFusedDQN, DQN, MultiHeadDQN
 from atari_wrapper import make_atari_env
 
 
@@ -106,10 +106,14 @@ def main(args: argparse.Namespace = get_args()) -> None:
             q_params = v_params = {"hidden_sizes": [128]}
             net = DQN(*args.state_shape, args.action_shape, args.device, dueling_param=(q_params, v_params)).to(
                 args.device)
-        case "concat":
-            net = ActionConcatenatedDQN(*args.state_shape, args.action_shape, args.device).to(args.device)
         case "multihead":
             net = MultiHeadDQN(*args.state_shape, args.action_shape, args.device).to(args.device)
+        case "concat":
+            net = ActionConcatenatedDQN(*args.state_shape, args.action_shape, args.device, action_encoding_dim=64).to(
+                args.device)
+        case "fuse":
+            net = ActionFusedDQN(*args.state_shape, args.action_shape, args.device, action_encoding_dim=64).to(
+                args.device)
         case _:  # classic
             net = DQN(*args.state_shape, args.action_shape, args.device).to(args.device)
     # noinspection PyUnboundLocalVariable

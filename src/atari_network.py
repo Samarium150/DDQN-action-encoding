@@ -82,9 +82,61 @@ class DQN(NetBase[Any]):
         return logits, state
 
 
+class MultiHeadDQN(NetBase[Any]):
+    """
+    DQN network that uses the same features but different MLPs per action
+    """
+
+    def __init__(
+            self,
+            c: int,
+            h: int,
+            w: int,
+            action_shape: Sequence[int] | int,
+            device: str | int | torch.device = "cpu",
+            feature_dim: int = 512,
+            head_dim: int = 64,
+            layer_initializer: Callable[[nn.Module], nn.Module] = lambda layer: layer_init(layer),
+    ) -> None:
+        super().__init__()
+        self.device = device
+        action_dim = int(np.prod(action_shape))
+        self.output_dim = action_dim
+        cnn = nn.Sequential(
+            layer_initializer(nn.Conv2d(c, 32, kernel_size=8, stride=4)),
+            nn.ReLU(inplace=True),
+            layer_initializer(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
+            nn.ReLU(inplace=True),
+            layer_initializer(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
+            nn.ReLU(inplace=True),
+            nn.Flatten(),
+        )
+        with torch.no_grad():
+            cnn_output_dim = int(np.prod(cnn(torch.zeros(1, c, h, w)).shape[1:]))
+        self.features = nn.Sequential(
+            cnn,
+            layer_initializer(nn.Linear(cnn_output_dim, feature_dim)),
+            nn.ReLU(inplace=True),
+        )
+        self.heads = nn.ModuleList([nn.Sequential(
+            layer_initializer(nn.Linear(feature_dim, head_dim)),
+            nn.ReLU(inplace=True),
+            layer_initializer(nn.Linear(head_dim, 1)),
+        ) for _ in range(action_dim)])
+
+    def forward(self, obs: np.ndarray | torch.Tensor, state: TRecurrentState | None = None,
+                info: dict[str, Any] | None = None) -> tuple[torch.Tensor, TRecurrentState | None]:
+        obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+        features = self.features(obs)
+        # Each head returns [batch_size, 1] -> squeeze to [batch_size]
+        q_list = [head(features).squeeze(-1) for head in self.heads]  # list of [batch_size]
+        q_values = torch.stack(q_list, dim=-1)  # [batch_size, n_actions]
+        return q_values, state
+
+
 class ActionConcatenatedDQN(NetBase[Any]):
     """
-    DQN network that concatenates the one-hot action vector with the state before feature extraction
+    DQN network that concatenates the one-hot action vector with the state as the CNN input
     """
 
     def __init__(
@@ -174,9 +226,9 @@ class ActionConcatenatedDQN(NetBase[Any]):
         return q_values, state
 
 
-class MultiHeadDQN(NetBase[Any]):
+class ActionFusedDQN(NetBase[Any]):
     """
-    DQN network that uses the same features but different MLPs per action
+    DQN network that concatenates the one-hot action vector with the CNN output
     """
 
     def __init__(
@@ -186,15 +238,25 @@ class MultiHeadDQN(NetBase[Any]):
             w: int,
             action_shape: Sequence[int] | int,
             device: str | int | torch.device = "cpu",
+            action_encoding_dim: int | None = None,
             feature_dim: int = 512,
-            head_dim: int = 64,
             layer_initializer: Callable[[nn.Module], nn.Module] = lambda layer: layer_init(layer),
     ) -> None:
         super().__init__()
         self.device = device
         action_dim = int(np.prod(action_shape))
         self.output_dim = action_dim
-        cnn = nn.Sequential(
+        if not action_encoding_dim:
+            self.action_encoding_dim = action_dim
+            self.action_encoder = lambda x: x
+        else:
+            self.action_encoding_dim = action_encoding_dim or action_dim
+            self.action_encoder = nn.Sequential(
+                layer_initializer(nn.Linear(action_dim, self.action_encoding_dim)),
+                nn.ReLU(inplace=True),
+            )
+        self.actions = torch.eye(self.output_dim, device=self.device, dtype=torch.float32)
+        self.features = nn.Sequential(
             layer_initializer(nn.Conv2d(c, 32, kernel_size=8, stride=4)),
             nn.ReLU(inplace=True),
             layer_initializer(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
@@ -204,23 +266,32 @@ class MultiHeadDQN(NetBase[Any]):
             nn.Flatten(),
         )
         with torch.no_grad():
-            cnn_output_dim = int(np.prod(cnn(torch.zeros(1, c, h, w)).shape[1:]))
-        self.features = nn.Sequential(
-            cnn,
-            layer_initializer(nn.Linear(cnn_output_dim, feature_dim)),
+            cnn_output_dim = int(
+                np.prod(self.features(torch.zeros(1, c, h, w)).shape[1:]))
+        self.net = nn.Sequential(
+            layer_initializer(nn.Linear(cnn_output_dim + self.action_encoding_dim, feature_dim)),
             nn.ReLU(inplace=True),
+            layer_initializer(nn.Linear(feature_dim, 1)),
         )
-        self.heads = nn.ModuleList([nn.Sequential(
-            layer_initializer(nn.Linear(feature_dim, head_dim)),
-            nn.ReLU(inplace=True),
-            layer_initializer(nn.Linear(head_dim, 1)),
-        ) for _ in range(action_dim)])
 
     def forward(self, obs: np.ndarray | torch.Tensor, state: TRecurrentState | None = None,
                 info: dict[str, Any] | None = None) -> tuple[torch.Tensor, TRecurrentState | None]:
         obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
-        features = self.features(obs)
-        # Each head returns [batch_size, 1] -> squeeze to [batch_size]
-        q_list = [head(features).squeeze(-1) for head in self.heads]  # list of [batch_size]
-        q_values = torch.stack(q_list, dim=-1)  # [batch_size, n_actions]
+        batch_size = obs.shape[0]
+
+        # Extract state features via CNN; flatten already handled inside self.cnn
+        state_features = self.features(obs)  # [batch_size, cnn_output_dim]
+
+        # [action_dim, action_encoding_dim]
+        encoded_actions = self.action_encoder(self.actions)
+
+        # Broadcast state features and action encodings to align per (batch, action)
+        state_features = state_features.unsqueeze(1).expand(-1, self.output_dim, -1)
+        encoded_actions = encoded_actions.unsqueeze(0).expand(batch_size, -1, -1)
+        fused = torch.cat([state_features, encoded_actions], dim=-1)
+
+        # Collapse batch/action dims for the feedforward head
+        fused = fused.view(batch_size * self.output_dim, -1)
+        q_values = self.net(fused).view(batch_size, self.output_dim)
+
         return q_values, state
