@@ -236,6 +236,3 @@ cython_debug/
 
 # Training log
 log/
-
-# User-specific helper scripts
-src/helper/wandb_log_helper.py
