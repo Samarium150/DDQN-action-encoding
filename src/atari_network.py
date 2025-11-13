@@ -187,7 +187,7 @@ class ActionConcatenatedDQN(NetBase[Any]):
                 layer_initializer(nn.Linear(action_dim, self.action_encoding_dim)),
                 nn.ReLU(inplace=True),
             )
-        self.actions = torch.eye(action_dim, dtype=torch.float32)
+        self.actions = torch.eye(action_dim, dtype=torch.float32, device=self.device)
         # CNN extracts features from both the state and the actions
         cnn = nn.Sequential(
             layer_initializer(nn.Conv2d(c + self.action_encoding_dim, 32, kernel_size=8, stride=4)),
@@ -282,7 +282,7 @@ class ActionFusedDQN(NetBase[Any]):
                 layer_initializer(nn.Linear(action_dim, self.action_encoding_dim)),
                 nn.ReLU(inplace=True),
             )
-        self.actions = torch.eye(self.output_dim, device=self.device, dtype=torch.float32)
+        self.actions = torch.eye(self.output_dim, dtype=torch.float32, device=self.device)
         self.features = nn.Sequential(
             layer_initializer(nn.Conv2d(c, 32, kernel_size=8, stride=4)),
             nn.ReLU(inplace=True),
