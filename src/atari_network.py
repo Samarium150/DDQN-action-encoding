@@ -8,6 +8,16 @@ from torch import nn
 
 
 def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.0) -> nn.Module:
+    """Initialize layer weights with orthogonal initialization.
+
+    Args:
+        layer: Neural network layer with weight and bias attributes (e.g., nn.Linear, nn.Conv2d)
+        std: Standard deviation for orthogonal initialization
+        bias_const: Constant value for bias initialization
+
+    Returns:
+        The initialized layer
+    """
     if hasattr(layer, "weight") and layer.weight is not None:
         nn.init.orthogonal_(layer.weight, std)
     if hasattr(layer, "bias") and layer.bias is not None:
@@ -135,8 +145,20 @@ class MultiHeadDQN(NetBase[Any]):
 
 
 class ActionConcatenatedDQN(NetBase[Any]):
-    """
-    DQN network that concatenates the one-hot action vector with the state as the CNN input
+    """DQN network that concatenates action encodings with state for Q-value estimation.
+
+    This network processes each action separately by concatenating its encoding with the state
+    observation, then computing Q(s,a) for each action through the network.
+
+    Args:
+        c: Number of input channels (e.g., stacked frames)
+        h: Height of input frames
+        w: Width of input frames
+        action_shape: Shape or number of discrete actions
+        device: Device to place tensors on (cpu/cuda)
+        action_encoding_dim: Dimension for action encoding (if None, uses one-hot encoding)
+        feature_dim: Dimension of the hidden feature layer
+        layer_initializer: Function to initialize layer weights
     """
 
     def __init__(
@@ -196,22 +218,27 @@ class ActionConcatenatedDQN(NetBase[Any]):
         obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
         batch_size, _, h, w = obs.shape
 
-        # (action_dim, action_encoding_dim)
+        # Step 1: Encode actions - convert one-hot to encoding if needed
+        # Shape: (action_dim, action_encoding_dim)
         encoded_actions = self.action_encoder(self.actions)
-        # Expand to spatial dimensions: (action_dim, action_encoding_dim, h, w)
+
+        # Step 2: Expand action encodings to match spatial dimensions of observations
+        # This creates a "grid" of the same action encoding repeated across all spatial positions
+        # Shape: (action_dim, action_encoding_dim, h, w)
         action_grids = encoded_actions[:, :, None, None].expand(-1, -1, h, w)
 
-        # Expand obs for all actions: (batch_size, c, h, w) -> (batch_size, 1, c, h, w)
+        # Step 3: Expand observations to process all actions simultaneously
+        # Add action dimension: (batch_size, c, h, w) -> (batch_size, 1, c, h, w)
         obs_expanded = obs.unsqueeze(1)
 
-        # Expand action grids for batch: (action_dim, action_encoding_dim, h, w) ->
-        # (1, action_dim, action_encoding_dim, h, w)
+        # Step 4: Expand action grids to process all batch items simultaneously
+        # Add batch dimension: (action_dim, action_encoding_dim, h, w) -> (1, action_dim, action_encoding_dim, h, w)
         action_grids_expanded = action_grids.unsqueeze(0)
 
-        # Concatenate obs with each action encoding
-        # (batch_size, action_dim, c + action_encoding_dim, h, w)
-        # Reshape to process all (batch, action) pairs:
-        # (batch_size * action_dim, c + action_encoding_dim, h, w)
+        # Step 5: Concatenate observation with each action encoding
+        # For each (batch, action) pair, concatenate obs with action along channel dimension
+        # Result shape: (batch_size, action_dim, c + action_encoding_dim, h, w)
+        # Then reshape to process all combinations at once: (batch_size * action_dim, c + action_encoding_dim, h, w)
         combined = torch.cat([
             obs_expanded.expand(-1, self.output_dim, -1, -1, -1),
             action_grids_expanded.expand(batch_size, -1, -1, -1, -1)

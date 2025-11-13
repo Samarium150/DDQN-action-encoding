@@ -103,18 +103,21 @@ def main(args: argparse.Namespace = get_args()) -> None:
     net: NetBase
     match args.network:
         case "dueling":
+            print("Using Dueling DQN network")
             q_params = v_params = {"hidden_sizes": [128]}
             net = DQN(*args.state_shape, args.action_shape, args.device, dueling_param=(q_params, v_params)).to(
                 args.device)
         case "multihead":
             net = MultiHeadDQN(*args.state_shape, args.action_shape, args.device).to(args.device)
         case "concat":
+            print("Using Action-Concatenated DQN network")
             net = ActionConcatenatedDQN(*args.state_shape, args.action_shape, args.device, action_encoding_dim=64).to(
                 args.device)
         case "fuse":
             net = ActionFusedDQN(*args.state_shape, args.action_shape, args.device, action_encoding_dim=64).to(
                 args.device)
         case _:  # classic
+            print(f"Using Classic DQN network (network type: {args.network})")
             net = DQN(*args.state_shape, args.action_shape, args.device).to(args.device)
     # noinspection PyUnboundLocalVariable
     optim = torch.optim.Adam(net.parameters(), lr=args.lr)
@@ -129,8 +132,13 @@ def main(args: argparse.Namespace = get_args()) -> None:
     )
     # load a previous policy
     if args.resume_path:
-        policy.load_state_dict(torch.load(args.resume_path, map_location=args.device))
-        print("Loaded agent from: ", args.resume_path)
+        try:
+            policy.load_state_dict(torch.load(args.resume_path, map_location=args.device, weights_only=True))
+            print("Loaded agent from: ", args.resume_path)
+        except FileNotFoundError:
+            print(f"Error: Resume path '{args.resume_path}' not found. Starting from scratch.")
+        except Exception as e:
+            print(f"Error loading model from '{args.resume_path}': {e}. Starting from scratch.")
     # replay buffer: `save_only_last_obs` and `stack_num` can be removed together when you have enough RAM
     buffer = VectorReplayBuffer(
         args.buffer_size,
@@ -221,7 +229,7 @@ def main(args: argparse.Namespace = get_args()) -> None:
             collected = collector.collect(n_step=args.buffer_size, reset_before_collect=True)
             print(f"Save buffer into {args.save_buffer_name}")
             # Unfortunately, pickle will cause oom with 1M buffer size
-            buffer.save_hdf5(args.save_buffer_name)
+            vrb.save_hdf5(args.save_buffer_name)
         else:
             print("Testing agent ...")
             test_collector.reset()
