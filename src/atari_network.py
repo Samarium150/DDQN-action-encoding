@@ -18,8 +18,6 @@ def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.
     Returns:
         The initialized layer
     """
-    nn.init.orthogonal_(layer.weight, std)
-    nn.init.constant_(layer.bias, bias_const)
     if hasattr(layer, "weight") and layer.weight is not None:
         nn.init.orthogonal_(layer.weight, std)
     if hasattr(layer, "bias") and layer.bias is not None:
